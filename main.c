@@ -28,6 +28,9 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
 #ifdef ALLINONE
 #include <sys/stat.h>
 #include <unistd.h>      /* access(), read(), close(), getcwd(), sysconf() */
+#include <strings.h>     /* strcasecmp() */
+#include <inttypes.h>    /* PRId64 etc. */
+#include <ctype.h>       /* isdigit */
 #ifdef USE_LONG_OPTIONS
 #include <getopt.h>      /* getopt_long() */
 #endif
@@ -35,8 +38,6 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
 #include <dirent.h>      /* opendir(), closedir(), readdir() etc. */
 #ifdef USE_OPENSSL
 #include <openssl/sha.h> /* SHA1(), SHA_DIGEST_LENGTH */
-#else
-#include <inttypes.h>
 #endif
 #ifdef USE_PTHREADS
 #include <pthread.h>     /* pthread functions and data structures */
@@ -88,26 +89,35 @@ extern void write_metainfo(FILE *f, metafile_t *m, unsigned char *hash_string);
 /*
  * create and open the metainfo file for writing and create a stream for it
  * we don't want to overwrite anything, so abort if the file is already there
+ * unless the --force option was specified
  */
-static FILE *open_file(const char *path)
+static FILE *open_file(const char *path, const int overwrite)
 {
-	int fd;  /* file descriptor */
-	FILE *f; /* file stream */
+	int fd;			/* file descriptor */
+	int fdflags;		/* flags for opening fd */
+	mode_t fdmode;		/* mode for opening fd */
+	FILE *f;		/* file stream */
 
-	/* open and create the file if it doesn't exist already */
-	fd = open(path, O_WRONLY | O_BINARY | O_CREAT | O_EXCL,
-		       S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+	/* open and create the file if it doesn't exist already
+	   truncate it if it does and the force option was used */
+	if (overwrite)
+		fdflags = O_WRONLY | O_BINARY | O_CREAT | O_TRUNC;
+	else
+		fdflags = O_WRONLY | O_BINARY | O_CREAT | O_EXCL;
+	fdmode = S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH;
+	fd = open(path, fdflags, fdmode);
 	if (fd < 0) {
-		fprintf(stderr, "Error creating '%s': %s\n",
-				path, strerror(errno));
+		fprintf(stderr, PROGRAM ": Error creating '%s': %s\n",
+			path, strerror(errno));
 		exit(EXIT_FAILURE);
 	}
 
 	/* create the stream from this filedescriptor */
 	f = fdopen(fd, "wb");
 	if (f == NULL) {
-		fprintf(stderr,	"Error creating stream for '%s': %s\n",
-				path, strerror(errno));
+		fprintf(stderr,
+			PROGRAM ": Error creating stream for '%s': %s\n",
+			path, strerror(errno));
 		exit(EXIT_FAILURE);
 	}
 
@@ -135,16 +145,18 @@ int main(int argc, char *argv[])
 	FILE *file;	/* stream for writing to the metainfo file */
 	metafile_t m = {
 		/* options */
-		18,   /* piece_length, 2^18 = 256kb by default */
+		0,    /* piece_length */
 		NULL, /* announce_list */
+		NULL, /* comment */
+		NULL, /* extra */
 		NULL, /* torrent_name */
 		NULL, /* metainfo_file_path */
 		NULL, /* web_seed_url */
-		NULL, /* comment */
 		0,    /* target_is_directory  */
 		0,    /* no_creation_date */
 		0,    /* private */
 		0,    /* verbose */
+		0,    /* force */
 #ifdef USE_PTHREADS
 		0,    /* threads, initialised by init() */
 #endif
@@ -156,14 +168,15 @@ int main(int argc, char *argv[])
 	};
 
 	/* print who we are */
-	printf("mktorrent " VERSION " (c) 2007, 2009 Emil Renner Berthing\n\n");
+	printf(PROGRAM " " VERSION
+	       " (c) 2007, 2009 Emil Renner Berthing\n\n");
 
 	/* process options */
 	init(&m, argc, argv);
 
 	/* open the file stream now, so we don't have to abort
 	   _after_ we did all the hashing in case we fail */
-	file = open_file(m.metainfo_file_path);
+	file = open_file(m.metainfo_file_path, m.force);
 
 	/* calculate hash string and write the metainfo to file */
 	write_metainfo(file, &m, make_hash(&m));

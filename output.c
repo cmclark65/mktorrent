@@ -21,6 +21,9 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
 #include <stdio.h>        /* printf() etc. */
 #include <string.h>       /* strlen() etc. */
 #include <time.h>         /* time() */
+#include <stdlib.h>       /* exit() */
+#include <ctype.h>        /* isdigit() */
+
 #ifdef USE_OPENSSL
 #include <openssl/sha.h>  /* SHA_DIGEST_LENGTH */
 #else
@@ -74,14 +77,14 @@ static void write_file_list(FILE *f, flist_t *list)
 		   sorry this code is even uglier than the rest */
 		a = list->path;
 		/* while there are subdirectories before the filename.. */
-		while ((b = strchr(a, DIRSEP_CHAR)) != NULL) {
-			/* set the next DIRSEP_CHAR to '\0' so fprintf
+		while ((b = strchr(a, DIRSEP[0])) != NULL) {
+			/* set the next DIRSEP[0] to '\0' so fprintf
 			   will only write the first subdirectory name */
 			*b = '\0';
 			/* print it bencoded */
 			fprintf(f, "%lu:%s", (unsigned long)strlen(a), a);
 			/* undo our alteration to the string */
-			*b = DIRSEP_CHAR;
+			*b = DIRSEP[0];
 			/* and move a to the beginning of the next
 			   subdir or filename */
 			a = b + 1;
@@ -110,11 +113,113 @@ static void write_web_seed_list(FILE *f, slist_t *list)
 }
 
 /*
+ * test for bencoded integer
+ *
+ * bencoded integer starts with 'i', ends with 'e', and between must be a
+ * base ten number. it may start with a minus sign. it may be zero. it may
+ * not be zero padded.
+ */
+int is_bencode_int(char *s)
+{
+	char *d;
+
+	d = s;
+	/* if the first char is not 'i', by far the most common case, s
+	 * isn't a bencode int. if it is the null char, it isn't a bencode
+	 * int. */
+	if (*s != 'i')
+		return 0;
+	if (*s == '\0')
+		return 0;
+	/* move d to the final char before the null. if d doesn't now point
+	 * to an 'e' it isn't a bencode int. */
+	while (d[1] != '\0')
+		d++;
+	if (*d != 'e')
+		return 0;
+	/* if there isn't at least one char between the 'i' and the 'e', it
+	 * isn't a bencode int. */
+	s++;
+	if (s == d)
+		return 0;
+	/* the first char must have special tests to allow a leading minus,
+	 * and to test for zero but not zero padded. if the leading minus
+	 * is present, there must be at least one more char and the next
+	 * char must be a non-zero digit. */
+	if (*s == '-') {
+		s++;
+		if (s == d)
+			return 0;
+		if (*s == '0')
+			return 0;
+		if (isdigit(*s))
+			s++;
+		else
+			return 0;
+	} else if (*s == '0') {
+		/* if the first char is 0 it must be the only character. */
+		s++;
+		return (s == d);
+	} else if (isdigit(*s)) {
+		/* any other digit is a legal first character */
+		s++;
+	}
+	/* if not returned by this point, there is a starting digit or a
+	 * minus followed by a starting digit. s points to the character
+	 * following that digit. zero or more digits between s and d will
+	 * be a legal bencoded int, any non-digits will make it invalid. */
+	while (s < d) {
+		if (isdigit(*s))
+			s++;
+		else
+			return 0;
+	}
+	return 1;
+}
+
+/*
+ * write extra fields
+ *
+ * traverse the list writing the extra key and value from each node as long
+ * as they sort as less than the reference key. return the first node in
+ * the list not written. if the reference key is NULL, write all the
+ * remaining nodes in the list.
+ */
+static elist_t *write_extra(FILE *f, elist_t *list, char *refkey)
+{
+	while ((list != NULL) &&
+	       (refkey == NULL || strcmp(list->key, refkey) < 0)) {
+		/* if the key and value strings are not null, print the key
+		 * as a bencoded string. */
+		if (list->key && list->value)
+			fprintf(f, "%d:%s", (int) strlen(list->key),
+				list->key);
+		else {
+			/* something is very broken if this happens */
+			fprintf(stderr, PROGRAM
+				": internal failure code extra\n");
+			exit(EXIT_FAILURE);
+		}
+		/* if it is a bencode integer, write it. else write it as a
+		 * bencoded string. */
+		if (is_bencode_int(list->value))
+			fprintf(f, "%s", list->value);
+		else
+			fprintf(f, "%d:%s", (int) strlen(list->value),
+				list->value);
+		list = list->next;
+	}
+	return list;
+}
+
+/*
  * write metainfo to the file stream using all the information
  * we've gathered so far and the hash string calculated
  */
 EXPORT void write_metainfo(FILE *f, metafile_t *m, unsigned char *hash_string)
 {
+	elist_t *extra_list = m->extra;
+
 	/* let the user know we've started writing the metainfo file */
 	printf("Writing metainfo file... ");
 	fflush(stdout);
@@ -139,32 +244,57 @@ EXPORT void write_metainfo(FILE *f, metafile_t *m, unsigned char *hash_string)
 				(unsigned long)strlen(m->comment),
 				m->comment);
 	/* I made this! */
-	fprintf(f, "10:created by13:mktorrent " VERSION);
+	fprintf(f, "10:created by%lu:%s %s",
+		(unsigned long) strlen(VERSION) + strlen(PROGRAM) + 1,
+		PROGRAM, VERSION);
 	/* add the creation date */
 	if (!m->no_creation_date)
 		fprintf(f, "13:creation datei%lde",
 			(long)time(NULL));
 
-	/* now here comes the info section
-	   it is yet another dictionary */
+	/* now here comes the info section; it is yet another dictionary.
+	   the entries in a dictionary must be written in order sorted by
+	   the keys. Before writing each key, there is an attempt to write
+	   any user defined extra entries which might need to be written
+	   first. */
 	fprintf(f, "4:infod");
-	/* first entry is either 'length', which specifies the length of a
-	   single file torrent, or a list of files and their respective sizes */
-	if (!m->target_is_directory)
-		fprintf(f, "6:lengthi%" PRIoff "e", m->file_list->size);
-	else
+	/* first entry is either 'files', which specifies a list of files
+	   and their respective sizes for a directory torrent, or 'length',
+	   which specifies the length of a single file torrent */
+	if (m->target_is_directory) {
+		if (extra_list)
+			extra_list = write_extra(f, extra_list, "files");
 		write_file_list(f, m->file_list);
+	} else {
+		if (extra_list)
+			extra_list = write_extra(f, extra_list, "length");
+		fprintf(f, "6:lengthi%" PRIoff "e", m->file_list->size);
+	}
 
 	/* the info section also contains the name of the torrent,
 	   the piece length and the hash string */
-	fprintf(f, "4:name%lu:%s12:piece lengthi%ue6:pieces%u:",
-		(unsigned long)strlen(m->torrent_name), m->torrent_name,
-		m->piece_length, m->pieces * SHA_DIGEST_LENGTH);
+	if (extra_list)
+		extra_list = write_extra(f, extra_list, "name");
+	fprintf(f, "4:name%lu:%s",
+		(unsigned long) strlen(m->torrent_name), m->torrent_name);
+	if (extra_list)
+		extra_list = write_extra(f, extra_list, "piece length");
+	fprintf(f, "12:piece lengthi%ue", m->piece_length);
+	if (extra_list)
+		extra_list = write_extra(f, extra_list, "pieces");
+	fprintf(f, "6:pieces%u:", m->pieces * SHA_DIGEST_LENGTH);
 	fwrite(hash_string, 1, m->pieces * SHA_DIGEST_LENGTH, f);
 
 	/* set the private flag */
-	if (m->private)
+	if (m->private) {
+		if (extra_list)
+			extra_list = write_extra(f, extra_list, "private");
 		fprintf(f, "7:privatei1e");
+	}
+
+	/* add any remaining extra fields. */
+	if (extra_list)
+		extra_list = write_extra(f, extra_list, NULL);
 
 	/* end the info section */
 	fprintf(f, "e");

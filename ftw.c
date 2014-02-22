@@ -27,9 +27,9 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
 #include <dirent.h>
 
 #ifdef _WIN32
-#define DIRSEP_CHAR '\\'
+#define DIRSEP "\\"
 #else
-#define DIRSEP_CHAR '/'
+#define DIRSEP "/"
 #endif /* _WIN32 */
 
 #define EXPORT
@@ -86,7 +86,7 @@ static unsigned int dir_state_reopen(struct dir_state *ds, char *name)
 		return 1;
 	}
 
-	name[ds->length] = DIRSEP_CHAR;
+	name[ds->length] = DIRSEP[0];
 
 	seekdir(ds->dir, ds->offset);
 
@@ -172,7 +172,7 @@ EXPORT int file_tree_walk(const char *dirname, unsigned int nfds,
 	}
 
 	/* strip ending directory separators */
-	while (end > path && *(end-1) == DIRSEP_CHAR) {
+	while (end > path && *(end-1) == DIRSEP[0]) {
 		end--;
 		*end = '\0';
 	}
@@ -183,7 +183,7 @@ EXPORT int file_tree_walk(const char *dirname, unsigned int nfds,
 	first_open = ds;
 	nopen = 1;
 
-	*end = DIRSEP_CHAR;
+	*end = DIRSEP[0];
 
 	while (1) {
 		struct dirent *de = readdir(ds->dir);
@@ -249,7 +249,7 @@ EXPORT int file_tree_walk(const char *dirname, unsigned int nfds,
 
 				nopen++;
 
-				*end = DIRSEP_CHAR;
+				*end = DIRSEP[0];
 			}
 		} else {
 			if (closedir(ds->dir)) {
