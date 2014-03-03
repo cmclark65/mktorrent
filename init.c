@@ -684,7 +684,8 @@ EXPORT void init(metafile_t *m, int argc, char *argv[])
 		(int64_t) BIT15MAX * ONEMEG, (int64_t) BIT16MAX * ONEMEG,
 		(int64_t) BIT17MAX * ONEMEG, (int64_t) BIT18MAX * ONEMEG,
 		(int64_t) BIT19MAX * ONEMEG, (int64_t) BIT20MAX * ONEMEG,
-		(int64_t) BIT21MAX * ONEMEG, (int64_t) BIT22MAX * ONEMEG
+		(int64_t) BIT21MAX * ONEMEG, (int64_t) BIT22MAX * ONEMEG,
+		(int64_t) BIT23MAX * ONEMEG
 	};
 	int num_piece_len_maxes = sizeof(piece_len_maxes) /
 	    sizeof(piece_len_maxes[0]);

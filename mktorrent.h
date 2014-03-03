@@ -15,6 +15,7 @@
 
 /* max torrent size in MB for a given piece length in bits */
 /* where an X bit piece length equals a 2^X byte piece size */
+#define	BIT23MAX	12800
 #define	BIT22MAX	6400
 #define	BIT21MAX	3200
 #define	BIT20MAX	1600
